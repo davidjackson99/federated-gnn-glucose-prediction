@@ -4,6 +4,7 @@ import torch.optim as optim
 from preprocess import get_all_patient_data
 from torch.utils.data import DataLoader, Dataset
 from sklearn.preprocessing import MinMaxScaler
+import numpy as np
 
 patient_data = get_all_patient_data()
 time_steps = 10
@@ -79,11 +80,15 @@ class LSTMModel(nn.Module):
 global_model = LSTMModel(input_dim=6, hidden_dim=12)
 
 
-import numpy as np
+import random
 
-def select_clients(num_clients, fraction):
-    selected_clients_indices = np.random.choice(range(num_clients), int(num_clients * fraction), replace=False)
-    return selected_clients_indices
+def select_random_sublist(num_clients, num_selected):
+    if num_clients % num_selected != 0:
+        raise ValueError("num_clients must be divisible by num_selected")
+    clients = list(range(num_clients))
+    sublists = [clients[i:i + num_selected] for i in range(0, num_clients, num_selected)]
+
+    return random.choice(sublists)
 
 
 def local_update(client_model, optimizer, train_loader, epochs=1):
@@ -106,14 +111,36 @@ def aggregate_global_model(global_model, client_models, client_weights):
     return global_model
 
 
-num_clients = 12
-num_selected = 3
-num_rounds = 20
-client_fraction = num_selected / num_clients
+#this function also take cient losses into account
+def advanced_aggregate_global_model(global_model, client_models, client_losses):
+    global_state_dict = global_model.state_dict()
+
+    # Invert losses to use as weights (lower loss = higher weight)
+    # Adding a small epsilon to avoid division by zero
+    epsilon = 1e-10
+    weights = [1 / (loss + epsilon) for loss in client_losses]
+    total_weight = sum(weights)
+
+    normalized_weights = [weight / total_weight for weight in weights]
+
+    for k in global_state_dict.keys():
+        updated_param = torch.zeros_like(global_state_dict[k])
+        for i, client_model in enumerate(client_models):
+            updated_param += normalized_weights[i] * client_model[k]
+
+        global_state_dict[k] = updated_param
+
+    global_model.load_state_dict(global_state_dict)
+    return global_model
+
+
+num_patients = 12 #number of patients
+num_selected = 3 #number of patients per client
+num_rounds = 5
 
 
 for round in range(num_rounds):
-    selected_clients = select_clients(num_clients, client_fraction)
+    selected_clients = select_random_sublist(num_patients, num_selected)
 
     client_models = []
     client_losses = []
@@ -135,10 +162,10 @@ for round in range(num_rounds):
 
         client_models.append(client_state_dict)
         client_losses.append(client_loss)
-    print('1d')
+    print('step')
 
     # Aggregate updates
-    global_model = aggregate_global_model(global_model, client_models, [1 / num_selected] * num_selected)
+    global_model = advanced_aggregate_global_model(global_model, client_models, client_losses)
 
 
 
@@ -204,7 +231,6 @@ import matplotlib
 matplotlib.use('TkAgg')
 import matplotlib.pyplot as plt
 
-# Assuming client_mse and client_mae contain MSE and MAE for each client respectively
 client_ids = [f'Client {i}' for i in range(len(client_mse))]
 
 actual_values = []
@@ -229,9 +255,10 @@ sampled_actuals = [selected_patient_actuals[i] for i in sampled_indices]
 sampled_predictions = [selected_patient_predictions[i] for i in sampled_indices]
 
 
+num_points_to_plot = 2000
 plt.figure(figsize=(10, 6))
-plt.plot(sampled_indices, sampled_actuals, label='Actual CBG')
-plt.plot(sampled_indices, sampled_predictions, label='Predicted CBG')
+plt.plot(sampled_indices[:num_points_to_plot], sampled_actuals[:num_points_to_plot], label='Actual CBG')
+plt.plot(sampled_indices[:num_points_to_plot], sampled_predictions[:num_points_to_plot], label='Predicted CBG')
 plt.title('Actual vs Predicted CBG Values (Sampled)')
 plt.xlabel('Time/Sequence Index')
 plt.ylabel('CBG Value')
