@@ -18,6 +18,7 @@ def create_graph_for_timepoint(data_row):
         G.add_node(metric, value=data_row[metric])
 
     # Adding edges based on assumed physiological relationships
+    # if data_row['carbInput'] != -1:
     G.add_edge('carbInput', 'cbg')  # Carbs intake affecting CBG
     G.add_edge('basal', 'cbg')      # Basal insulin affecting CBG
     G.add_edge('bolus', 'cbg')      # Bolus insulin affecting CBG
@@ -162,11 +163,15 @@ lstm_hidden_size = gcn_hidden_size
 global_model = SpatialTemporalGNN(node_feature_size, gcn_hidden_size, lstm_hidden_size)
 
 
-import numpy as np
+import random
 
-def select_clients(num_clients, fraction):
-    selected_clients_indices = np.random.choice(range(num_clients), int(num_clients * fraction), replace=False)
-    return selected_clients_indices
+def select_random_sublist(num_clients, num_selected):
+    if num_clients % num_selected != 0:
+        raise ValueError("num_clients must be divisible by num_selected")
+    clients = list(range(num_clients))
+    sublists = [clients[i:i + num_selected] for i in range(0, num_clients, num_selected)]
+
+    return random.choice(sublists)
 
 
 def local_update(client_model, optimizer, train_loader, epochs=1):
@@ -189,14 +194,13 @@ def aggregate_global_model(global_model, client_models, client_weights):
     return global_model
 
 
-num_clients = 12
-num_selected = 3
-num_rounds = 10
-client_fraction = num_selected / num_clients
+num_patients = 12 #number of patients
+num_selected = 4 #number of patients per client
+num_rounds = 5
 
 
 for round in range(num_rounds):
-    selected_clients = select_clients(num_clients, client_fraction)
+    selected_clients = select_random_sublist(num_patients, num_selected)
 
     client_models = []
     client_losses = []
@@ -210,7 +214,7 @@ for round in range(num_rounds):
         # Optimizer for client model
         optimizer = optim.Adam(client_model.parameters(), lr=0.01)
 
-        client_state_dict, client_loss = local_update(client_model, optimizer, client_train_loader, epochs=10)
+        client_state_dict, client_loss = local_update(client_model, optimizer, client_train_loader, epochs=5)
 
         print(client_loss)
 
@@ -219,7 +223,7 @@ for round in range(num_rounds):
     print('round')
 
     # Aggregate updates
-    global_model = aggregate_global_model(global_model, client_models, [1 / num_selected] * num_selected)
+    global_model = aggregate_global_model(global_model, client_models, [1 / num_selected] * num_selected) #weights / aggregation function could be improved
 
 
 
